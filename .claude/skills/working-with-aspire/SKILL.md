@@ -1,437 +1,283 @@
 ---
 name: working-with-aspire
-description: Use when building distributed apps with Aspire 13+; when orchestrating .NET, JavaScript, Python, or polyglot services; when environment variables or service discovery aren't working; when migrating from .NET Aspire 9 or Community Toolkit; when seeing AddNpmApp deprecated errors; when OTEL not appearing in dashboard; when ports change on restart breaking OAuth; when configuring MCP server for AI assistants
+description: Use when building distributed apps with Aspire; orchestrating .NET, JavaScript, Python, or polyglot services; when environment variables or service discovery aren't working; when migrating from .NET Aspire 9 to 13+ or Community Toolkit; when seeing AddNpmApp deprecated errors; when OTEL not appearing in dashboard; when ports change on restart breaking OAuth; when configuring MCP server for AI assistants; when debugging Aspire apps and need to check resource status or logs
 ---
 
-# Working with Aspire
+# Working with .NET Aspire 13
 
-Aspire 13 (late 2025) rebranded from ".NET Aspire" to just "Aspire" and became a polyglot platform. JavaScript and Python are first-class citizens alongside .NET. Aspire can also orchestrate Rust, Go, Java, and any containerized service.
+## For AI Assistants: Use MCP Tools
 
-**Core principle:** Aspire orchestrates your distributed app's development experience. Get the app model right, and environment variables, service discovery, telemetry, and containerization follow.
+**CRITICAL:** When helping users debug Aspire applications, use the Aspire MCP tools instead of curl, external HTTP calls, or suggesting manual dashboard inspection.
 
-> **For language-specific integrations** (.NET, JavaScript, Python, MAUI) including OpenTelemetry setup and full stack examples, see `app-types.md` in this skill directory.
+| Task | MCP Tool | NOT This |
+|------|----------|----------|
+| Check resource status | `list_resources` | ❌ curl to dashboard API |
+| Get service logs | `list_console_logs` | ❌ curl, docker logs |
+| View traces | `list_traces` | ❌ curl to OTLP endpoint |
+| Find errors in traces | `list_trace_structured_logs` | ❌ manual dashboard search |
+| List available AppHosts | `list_apphosts` | ❌ file system search |
 
-## When to Use
+If MCP is not configured, guide the user to run `aspire mcp init` in their AppHost directory.
 
-- Building distributed apps with multiple services (.NET, JavaScript, Python, Go, Rust)
-- Orchestrating local development with databases, caches, message queues
-- Setting up OpenTelemetry observability across polyglot services
-- Migrating from .NET Aspire 8/9 or Community Toolkit extensions
-- Debugging environment variable or service discovery issues
-- Adding mobile app development with MAUI + emulators
+## Quick Reference
 
-## When NOT to Use
+| Task | Reference File |
+|------|----------------|
+| AppHost patterns, resources, lifecycle | `app-host.md` |
+| Azure integrations (databases, messaging, AI) | `azure-integrations.md` |
+| Database integrations (Postgres, SQL, Mongo) | `database-integrations.md` |
+| Caching (Redis, Valkey, Garnet) | `caching-integrations.md` |
+| Messaging (Kafka, RabbitMQ, NATS) | `messaging-integrations.md` |
+| Polyglot (Node.js, Python, Go, Rust, Java) | `polyglot-integrations.md` |
+| Deployment, CLI, and aspire do pipelines | `deployment-cli.md` |
+| Testing with Aspire | `testing.md` |
+| Errors and troubleshooting | `diagnostics.md` |
+| MCP integration for AI assistants | `mcp-integration.md` |
+| VS Code extension | `vs-code-extension.md` |
+| Certificate trust configuration | `certificate-config.md` |
+| Migration from 9.x to 13.x | `aspire-13-migration.md` |
 
-- Single-service apps (just use standard hosting)
-- Production deployment only (Aspire is dev-focused; use `azd` or k8s for prod)
-- Projects not using .NET AppHost (Aspire requires a C# orchestrator)
+## Common Mistakes
 
-## Critical Changes in Aspire 13
+### ❌ Wrong: Using non-existent or deprecated APIs
 
-| Before | After |
-|--------|-------|
-| `.NET Aspire 9.x` | `Aspire 13` |
-| `Aspire.Hosting.NodeJs` | `Aspire.Hosting.JavaScript` |
-| `AddNpmApp()` | `AddJavaScriptApp()` or `AddViteApp()` |
-| Community Toolkit Vite support | Built into core Aspire |
-| `dotnet workload install aspire` | `aspire` CLI (standalone) |
-| Random ports for JS apps | Configurable with `WithHttpEndpoint` |
+| Wrong | Correct | Why |
+|-------|---------|-----|
+| `AddPythonUvicornApp` | `AddUvicornApp` | Method is just `AddUvicornApp` |
+| `AddNpmApp` | `AddViteApp` or `AddJavaScriptApp` | `AddNpmApp` removed in 13.0 |
+| `AddPythonApp` for FastAPI | `AddUvicornApp` | Use AddUvicornApp for ASGI (FastAPI, Starlette) |
+| `Aspire.Hosting.NodeJs` | `Aspire.Hosting.JavaScript` | Package renamed in 13.0 |
 
-## Polyglot Quick Reference
+### ❌ Wrong: Putting secrets in appsettings.json
 
-| Language | Method | Use Case |
-|----------|--------|----------|
-| **JavaScript** | `AddViteApp()` | Vite projects (React, Vue, Svelte) |
-| | `AddJavaScriptApp()` | General npm scripts |
-| | `AddNodeApp()` | Run specific JS files with Node |
-| **Python** | `AddUvicornApp()` | ASGI web apps (FastAPI, Starlette) |
-| | `AddPythonModule()` | Run Python modules (`-m` flag) |
-| | `AddPythonExecutable()` | Run venv binaries (celery, gunicorn) |
-| **.NET** | `AddProject<T>()` | .NET projects |
-
-**Common modifiers:**
 ```csharp
-.WithReference(otherService)     // Service discovery
-.WaitFor(dependency)             // Startup ordering
-.WithHttpEndpoint(port: 5173, env: "PORT")  // Fixed port
-.WithEnvironment("KEY", "value") // Environment variables
+// WRONG - secrets exposed in source control
+// appsettings.json: { "Parameters": { "api-key": "secret123" } }
+
+// CORRECT - use user-secrets for development
+// dotnet user-secrets set "Parameters:api-key" "secret123"
 ```
 
-### Which JavaScript Method?
+## Aspire 13 Breaking Changes
 
-```dot
-digraph js_method {
-    rankdir=TB;
-    node [shape=diamond];
+**Critical:** Migration from Aspire 9.x requires attention. See `aspire-13-migration.md` for full details.
 
-    "Using Vite?" -> "AddViteApp()" [label="yes"];
-    "Using Vite?" -> "Running npm script?" [label="no"];
-    "Running npm script?" -> "AddJavaScriptApp()" [label="yes"];
-    "Running npm script?" -> "AddNodeApp()" [label="no\n(direct .js file)"];
-
-    "AddViteApp()" [shape=box];
-    "AddJavaScriptApp()" [shape=box];
-    "AddNodeApp()" [shape=box];
-}
-```
-
-**Builder syntax:**
+### JavaScript/Node.js Changes (13.0)
 ```csharp
-var builder = DistributedApplication.CreateBuilder(args);  // CORRECT
-// NOT: DistributedApplicationBuilder.CreateBuilder
+// BEFORE (9.x) - REMOVED IN 13.0
+builder.AddNpmApp("frontend", "../app", scriptName: "dev", args: ["--no-open"])
+
+// AFTER (13.0) - Use AddJavaScriptApp or AddViteApp
+builder.AddJavaScriptApp("frontend", "../app")
+    .WithRunScript("dev")
+    .WithArgs("--no-open");
+
+// For Vite/React specifically:
+builder.AddViteApp("frontend", "../app")
+    .WithHttpEndpoint(env: "PORT");
+
+// Package renamed: Aspire.Hosting.NodeJs → Aspire.Hosting.JavaScript
 ```
 
-## Aspire CLI
+### Azure Redis Changes (13.1)
+```csharp
+// BEFORE (13.0) - DEPRECATED
+builder.AddAzureRedisEnterprise("cache")
 
-Install via platform package managers, not `dotnet workload`:
-
-```bash
-# macOS/Linux
-curl -sSL https://aspire.dev/install.sh | bash
-
-# Windows
-irm https://aspire.dev/install.ps1 | iex
+// AFTER (13.1)
+builder.AddAzureManagedRedis("cache")
 ```
 
-### Key Commands
+### Network Context Changes (13.0)
+```csharp
+// BEFORE (9.x) - containerHostName parameter removed
+await resource.ProcessArgumentValuesAsync(
+    executionContext, processValue, logger,
+    containerHostName: "localhost", cancellationToken);
 
-| Command | Purpose |
-|---------|---------|
-| `aspire new` | Interactive project creation with templates |
-| `aspire init` | Initialize existing project for Aspire (can create single-file AppHost) |
-| `aspire run` | Start orchestrated apps (auto-terminates previous instances in 13.1+) |
-| `aspire update` | Update Aspire packages in solution |
-| `aspire update --self` | Update the CLI itself |
-| `aspire publish` | Serialize resources to disk (generates manifests, Dockerfiles) |
-| `aspire deploy` | Deploy solutions to cloud (Preview) |
-| `aspire exec` | Run commands in resource context (e.g., EF migrations) |
-| `aspire config` | Manage CLI settings |
-| `aspire mcp init` | Configure MCP server for AI assistants |
+// AFTER (13.0) - Use NetworkIdentifier
+await resource.ProcessArgumentValuesAsync(
+    executionContext, processValue, logger, cancellationToken);
 
+// Get endpoints with network context
+var endpoint = api.GetEndpoint("http", KnownNetworkIdentifiers.DefaultAspireContainerNetwork);
+```
+
+### Publishing API Changes (13.0)
+```csharp
+// BEFORE (9.x)
+public class MyPublisher : IDistributedApplicationPublisher { }
+
+// AFTER (13.0) - Use aspire do pipelines instead
+// IDistributedApplicationPublisher is deprecated
+```
+
+## Aspire 13.0+ New Features
+
+### Certificate Trust Automation
+```csharp
+// Automatic - no configuration needed
+var pythonApi = builder.AddUvicornApp("api", "./api", "main:app");
+var nodeApi = builder.AddJavaScriptApp("frontend", "./frontend");
+// Both automatically trust development certificates
+```
+
+### MCP Integration for AI Assistants
 ```bash
-# Create new project with template
-aspire new
-# Templates: aspire-starter, aspire-ts-cs-starter, aspire-py-starter
-
-# Initialize Aspire in existing solution
-aspire init
-# Discovers existing projects and configures AppHost
-# Can create single-file AppHost with #:package directives
-
-# Run with specific launch profile
-aspire run --launch-profile Development
-
-# Update all Aspire packages to latest
-aspire update
-
-# Run EF migrations in context of a resource
-aspire exec api -- dotnet ef database update
-
-# Configure MCP for AI assistants (Claude Code, GitHub Copilot, etc.)
+# Initialize MCP for Claude Code, GitHub Copilot, etc.
 aspire mcp init
 ```
 
-### aspire init Workflow
-
-When running `aspire init` in an existing solution:
-
-1. Discovers all projects in solution
-2. Prompts to select which projects to orchestrate
-3. Creates AppHost project if missing (or single-file AppHost)
-4. Adds ServiceDefaults project if missing
-5. Configures project references automatically
-
-### Deployment Commands
-
-For production deployment, `azd` (Azure Developer CLI) remains the recommended path with first-class Aspire support:
-
+### aspire do Pipeline System
 ```bash
-# Initialize azd for Aspire project
-azd init
-
-# Provision infrastructure and deploy
-azd up
+aspire do build           # Build container images
+aspire do push            # Push to registry
+aspire do deploy          # Full deployment
+aspire do diagnostics     # Show available steps
 ```
 
-The `aspire publish` and `aspire deploy` commands provide more granular control:
-- `aspire publish` generates Docker Compose, Kubernetes manifests, or Bicep templates
-- `aspire deploy` (Preview) orchestrates full deployment including infrastructure provisioning
-
-## Dashboard MCP Server
-
-Aspire 13+ includes a **built-in MCP server in the dashboard** that AI assistants can query. This enables AI coding assistants to:
-
-- List all resources with their state and endpoints
-- Access console logs in real-time
-- Retrieve structured logs and traces
-- Execute commands on resources
-
-### Setup with `aspire mcp init`
-
+### aspire init (Aspirify Existing Projects)
 ```bash
-# Auto-configure for your AI environment
-aspire mcp init
-# Detects and configures: VS Code, GitHub Copilot CLI, Claude Code, Open Code
+aspire init               # Interactive setup
+aspire init --single-file # Create .cs AppHost without .csproj
 ```
 
-Or click the **MCP button** in the Dashboard's top right corner for manual setup.
-
-### Available MCP Tools
-
-| Tool | Purpose |
-|------|---------|
-| `list_resources` | Lists all resources with state, health, endpoints, commands |
-| `list_console_logs` | Console logs for a specific resource |
-| `list_structured_logs` | Structured logs, optionally filtered by resource |
-| `list_traces` | Distributed traces across services |
-
-> **Note:** Some AI assistants don't support self-signed certificates. Use `aspire config` to configure an HTTP endpoint if needed.
-
-## Environment Variables
-
-### Pattern 1: Fixed Values
+### Single-File AppHost
 ```csharp
-.WithEnvironment("NODE_ENV", "development")
-.WithEnvironment("VITE_FEATURE_FLAG", "true")
+// apphost.cs - no project file needed
+#:package Aspire.Hosting@*
+#:package Aspire.Hosting.Redis@*
+
+var builder = DistributedApplication.CreateBuilder(args);
+var cache = builder.AddRedis("cache");
+builder.Build().Run();
 ```
 
-### Pattern 2: Port Binding (env parameter)
-```csharp
-// PORT env var set to allocated port value
-.WithHttpEndpoint(env: "PORT")
+## Common Patterns
 
-// Or fixed port (for OAuth redirect URLs)
-.WithHttpEndpoint(port: 5173, env: "PORT")
-```
-
-### Pattern 3: Service Discovery with WithReference
+### FastAPI + React (Vite) Full Stack
 ```csharp
-var api = builder.AddProject<Projects.Api>("api");
-var frontend = builder.AddViteApp("frontend", "../frontend")
+// Required packages:
+// dotnet add package Aspire.Hosting.Python
+// dotnet add package Aspire.Hosting.JavaScript  (NOT NodeJs!)
+// dotnet add package Aspire.Hosting.PostgreSQL
+
+var builder = DistributedApplication.CreateBuilder(args);
+
+// Database
+var db = builder.AddPostgres("db")
+    .AddDatabase("appdata")
+    .WithDataVolume();
+
+// FastAPI backend - use AddUvicornApp (NOT AddPythonApp!)
+var api = builder.AddUvicornApp("api", "../api", "main:app")
+    .WithHttpEndpoint(port: 8000, env: "PORT")
+    .WithReference(db)
+    .WaitFor(db);
+
+// React frontend - use AddViteApp (NOT AddNpmApp!)
+builder.AddViteApp("frontend", "../frontend")
+    .WithHttpEndpoint(env: "PORT")
+    .WithExternalHttpEndpoints()
     .WithReference(api);
 
-// Aspire automatically sets:
-// API_HTTP -> http://localhost:5xxx
-// API_HTTPS -> https://localhost:5xxx
+builder.Build().Run();
 ```
 
-### Pattern 4: Connection Strings (Polyglot Formats)
+Frontend reads API URL from env: `process.env.services__api__http__0`
+
+### Basic AppHost Structure
 ```csharp
-var postgres = builder.AddPostgres("postgres").AddDatabase("appdb");
-var nodeApi = builder.AddNodeApp("api", "../api", "server.js")
-    .WithReference(postgres);
+var builder = DistributedApplication.CreateBuilder(args);
 
-// Aspire sets multiple formats for cross-language compatibility:
-// APPDB_URI -> postgresql://user:pass@host:port/appdb (URI format)
-// APPDB_CONNECTIONSTRING -> Host=...;Database=...;... (ADO.NET format)
-// APPDB_HOST, APPDB_PORT, APPDB_USERNAME, APPDB_PASSWORD, APPDB_DATABASE (individual)
+// Database
+var db = builder.AddPostgres("db")
+    .AddDatabase("appdata")
+    .WithDataVolume();
+
+// API with database reference
+var api = builder.AddProject<Projects.Api>("api")
+    .WithReference(db)
+    .WaitFor(db);
+
+// Frontend with API reference
+builder.AddViteApp("frontend", "../frontend")
+    .WithHttpEndpoint(env: "PORT")
+    .WithReference(api);
+
+builder.Build().Run();
 ```
 
-### VITE_ Prefix (Critical for Frontend)
-
-Vite only exposes env vars prefixed with `VITE_` to client code:
-
-```typescript
-// Works
-const apiUrl = import.meta.env.VITE_API_URL;
-
-// Won't work (server-side only)
-const secret = import.meta.env.API_SECRET;  // undefined
-```
-
-**In AppHost:**
+### Service Discovery Pattern
 ```csharp
-// For client-side access
-.WithEnvironment("VITE_API_URL", api.GetEndpoint("http"))
+// Producer exposes endpoint
+var api = builder.AddProject<Projects.Api>("api")
+    .WithHttpEndpoint(port: 5000, name: "api");
 
-// For server-side only
-.WithEnvironment("DATABASE_URL", db.ConnectionString)
+// Consumer references it (gets services__api__api__0 env var)
+builder.AddProject<Projects.Web>("web")
+    .WithReference(api);
 ```
 
-## Integrations Quick Reference
-
-### PostgreSQL
-
+### Health Checks and Wait
 ```csharp
-// AppHost
-var postgres = builder.AddPostgres("postgres")
-    .WithDataVolume()           // Persist data
-    .WithPgAdmin();             // Optional admin UI
-
-var appDb = postgres.AddDatabase("appdb");
+var db = builder.AddPostgres("db");
+var cache = builder.AddRedis("cache");
 
 builder.AddProject<Projects.Api>("api")
-    .WithReference(appDb);
-
-// In .NET service
-builder.AddNpgsqlDbContext<AppDbContext>("appdb");
+    .WithReference(db)
+    .WithReference(cache)
+    .WaitFor(db)           // Wait for running
+    .WaitForHealthy(cache); // Wait for healthy (requires health check)
 ```
 
-### Redis
+## When to Read Specific Files
 
-```csharp
-// AppHost
-var redis = builder.AddRedis("cache")
-    .WithDataVolume()
-    .WithRedisInsight();  // Optional UI
+**Read `app-host.md` when:**
+- Setting up new AppHost project
+- Understanding resource lifecycle events
+- Configuring endpoints and networking
+- Using parameters and secrets
 
-builder.AddProject<Projects.Api>("api")
-    .WithReference(redis);
+**Read `azure-integrations.md` when:**
+- Using Azure services (Cosmos, Service Bus, Storage)
+- Running Azure emulators locally
+- Using `RunAsEmulator()` or `RunAsContainer()`
+- Customizing Bicep output
 
-// In .NET service
-builder.AddRedisClient("cache");
-// Or for output caching
-builder.AddRedisOutputCache("cache");
-```
+**Read `polyglot-integrations.md` when:**
+- Adding Node.js, Python, Go, Rust, or Java apps
+- Frontend frameworks (Vite, Angular, React)
+- Container-based polyglot services
+- Migrating from AddNpmApp to AddJavaScriptApp
 
-### SQLite
+**Read `deployment-cli.md` when:**
+- Using `aspire deploy`, `aspire publish`, or `aspire do`
+- Using `aspire init` to Aspirify existing projects
+- Setting up CI/CD pipelines
+- Understanding manifest format
 
-```csharp
-// AppHost - SQLite is simpler (file-based)
-builder.AddProject<Projects.Api>("api");
+**Read `mcp-integration.md` when:**
+- Setting up AI assistant integration
+- Configuring Claude Code, GitHub Copilot, or Cursor
+- Excluding resources from MCP access
 
-// In .NET service Program.cs
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseSqlite("Data Source=app.db"));
+**Read `vs-code-extension.md` when:**
+- Using Aspire in VS Code
+- Debugging polyglot applications
+- Creating new Aspire projects in VS Code
 
-// Or with Aspire Community Toolkit SQLite integration
-builder.AddSqliteDbContext<AppDbContext>("sqlite");
-```
+**Read `certificate-config.md` when:**
+- Configuring HTTPS for polyglot apps
+- Custom certificate authorities
+- Certificate trust issues between services
 
-### Integration Packages
+**Read `aspire-13-migration.md` when:**
+- Upgrading from Aspire 9.x
+- Seeing deprecated API warnings
+- Container networking issues after upgrade
 
-| Integration | NuGet Package |
-|-------------|---------------|
-| PostgreSQL | `Aspire.Npgsql` / `Aspire.Npgsql.EntityFrameworkCore.PostgreSQL` |
-| Redis | `Aspire.StackExchange.Redis` |
-| SQLite (EF) | `CommunityToolkit.Aspire.Hosting.SQLite.EntityFrameworkCore` |
-| MongoDB | `Aspire.MongoDB.Driver` |
-| RabbitMQ | `Aspire.RabbitMQ.Client` |
-| Azure Service Bus | `Aspire.Azure.Messaging.ServiceBus` |
-| JavaScript | `Aspire.Hosting.JavaScript` |
-| Python | `Aspire.Hosting.Python` |
-| MAUI | `Aspire.Hosting.Maui` (preview) |
-
-## Common Issues and Fixes
-
-### Issue: Environment Variables Not Reaching Vite App
-
-**Causes:**
-1. Missing `VITE_` prefix
-2. Using deprecated `AddNpmApp`
-3. Env var set after process starts
-
-**Fix:**
-```csharp
-var frontend = builder.AddViteApp("frontend", "../frontend")
-    .WithEnvironment("VITE_API_URL", api.GetEndpoint("http"));
-```
-
-### Issue: Port Changes on Every Restart (Breaking OAuth)
-
-**Fix:** Specify fixed port
-```csharp
-.WithHttpEndpoint(port: 5173, env: "PORT")
-```
-
-### Issue: OTEL Not Showing in Dashboard
-
-**Causes:**
-1. Missing instrumentation packages
-2. Wrong endpoint URL
-3. Missing service name
-
-**Fix for Node.js:**
-```bash
-# Ensure OTEL_EXPORTER_OTLP_ENDPOINT is set (Aspire does this)
-# Check logs for connection errors
-```
-
-### Issue: Python Telemetry Missing
-
-**Fix:** Use opentelemetry-instrument wrapper:
-```bash
-opentelemetry-instrument python -m uvicorn main:app
-```
-
-### Issue: Community Toolkit AddViteApp Bugs
-
-**Fix:** Upgrade to Aspire 13 (Vite support moved to core)
-```xml
-<!-- Remove old package -->
-<!-- <PackageReference Include="CommunityToolkit.Aspire.Hosting.NodeJS.Extensions" /> -->
-
-<!-- Use built-in -->
-<PackageReference Include="Aspire.Hosting.JavaScript" Version="13.*" />
-```
-
-### Issue: JavaScript Apps Build-Only (Can't Deploy Standalone)
-
-**Known limitation:** `AddJavaScriptApp` and `AddViteApp` resources are hardcoded as build-only containers. For deployment scenarios where JS apps need to run as standalone services, you may need custom Dockerfile handling.
-
-### Issue: MAUI App Doesn't Launch
-
-**Expected behavior:** MAUI apps won't auto-launch. Start each .NET MAUI target manually through the dashboard.
-
-## Breaking Changes in Aspire 13
-
-### Package Rename
-`Aspire.Hosting.NodeJs` → `Aspire.Hosting.JavaScript`
-
-### Removed APIs
-- `AddNpmApp()` - use `AddJavaScriptApp()` or `AddViteApp()`
-- Publishing infrastructure (`PublishingContext`, `WithPublishingCallback`)
-- Old debugging APIs with `debugAdapterId` parameters
-
-### Constructor Changes
-- `AllocatedEndpoint` now requires `NetworkIdentifier` parameter
-- `AddNodeApp()` uses relative `scriptPath` instead of absolute paths
-- `InteractionInput` properties changed to init-only
-
-### AppHost SDK Change
-```xml
-<!-- Before (9.x) -->
-<Project Sdk="Microsoft.NET.Sdk">
-  <Sdk Name="Aspire.AppHost.Sdk" Version="9.5.2" />
-  <PackageReference Include="Aspire.Hosting.AppHost" Version="9.5.2" />
-
-<!-- After (13.0) - simplified -->
-<Project Sdk="Aspire.AppHost.Sdk/13.0.0">
-  <!-- Aspire.Hosting.AppHost included automatically -->
-```
-
-### Aspire 13.1 Enhancements
-- Channel persistence: `aspire update --self` saves channel selection globally
-- `--channel` option on `aspire new` and `aspire init`
-- Auto-termination of running instances when running `aspire run`
-- stdio-based MCP server via CLI (`aspire mcp init`)
-
-## Anti-Patterns
-
-| Don't | Do |
-|-------|-----|
-| `dotnet workload install aspire` | Use `aspire` CLI |
-| `AddNpmApp()` | `AddViteApp()` or `AddJavaScriptApp()` |
-| Hardcode connection strings | Use `WithReference()` |
-| Put secrets in AppHost code | Use `builder.AddParameter()` with secrets |
-| Skip `AddServiceDefaults()` in .NET | Always add for OTEL + health |
-| Use `API_URL` for Vite client | Use `VITE_API_URL` |
-| Expect random ports for OAuth | Specify fixed port |
-| Console.WriteLine for logging | Use ILogger with structured logging |
-| Skip instrumentation in non-.NET | Add OTEL packages to Python/Node |
-| Use `aspire do build/publish` | Use `aspire publish` / `aspire deploy` |
-
-## Red Flags - STOP
-
-- Using `Aspire.Hosting.NodeJs` (renamed to `Aspire.Hosting.JavaScript`)
-- Using `AddNpmApp` (deprecated, use `AddViteApp` or `AddJavaScriptApp`)
-- Using `AddPythonApp` for FastAPI/web apps (use `AddUvicornApp` instead)
-- Using Community Toolkit for Vite (moved to core in Aspire 13)
-- Missing `VITE_` prefix for client-side env vars
-- Not calling `AddServiceDefaults()` in .NET services
-- Using `dotnet workload` instead of `aspire` CLI
-- Expecting env vars without `.WithReference()` or `.WithEnvironment()`
-- Not specifying port when OAuth/auth requires fixed URLs
-- Using `DistributedApplicationBuilder.CreateBuilder` (use `DistributedApplication.CreateBuilder`)
-- Logging without structured properties (breaks dashboard search)
-- Using `aspire do build` or `aspire do publish` (these aren't real commands)
+**Read `diagnostics.md` when:**
+- Seeing ASPIRE* compiler errors
+- Debugging service discovery issues
+- Troubleshooting container startup
