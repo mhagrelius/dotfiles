@@ -249,6 +249,107 @@ public class ResilientAgent
 }
 ```
 
+## Middleware Patterns
+
+Three types of middleware for intercepting agent operations.
+
+### Agent Run Middleware
+
+Intercepts agent runs to inspect/modify input and output:
+
+```csharp
+async Task<AgentRunResponse> LoggingMiddleware(
+    IEnumerable<ChatMessage> messages,
+    AgentThread? thread,
+    AgentRunOptions? options,
+    AIAgent innerAgent,
+    CancellationToken ct)
+{
+    Console.WriteLine($"Input: {messages.Count()} messages");
+    var response = await innerAgent.RunAsync(messages, thread, options, ct);
+    Console.WriteLine($"Output: {response.Messages.Count} messages");
+    return response;
+}
+
+// Apply to agent
+var agentWithMiddleware = baseAgent
+    .AsBuilder()
+    .Use(LoggingMiddleware)
+    .Build();
+```
+
+### Function Calling Middleware
+
+Intercepts tool invocations:
+
+```csharp
+async ValueTask<object?> AuditFunctionMiddleware(
+    AIAgent agent,
+    FunctionInvocationContext context,
+    Func<FunctionInvocationContext, CancellationToken, ValueTask<object?>> next,
+    CancellationToken ct)
+{
+    Console.WriteLine($"Calling: {context.Function.Name}");
+    var result = await next(context, ct);
+    Console.WriteLine($"Result: {result}");
+    return result;
+}
+
+var agentWithFunctionMiddleware = baseAgent
+    .AsBuilder()
+    .Use(AuditFunctionMiddleware)
+    .Build();
+```
+
+### Chat Client Middleware
+
+Intercepts calls to the underlying inference service:
+
+```csharp
+async Task<ChatResponse> TokenCountingMiddleware(
+    IEnumerable<ChatMessage> messages,
+    ChatOptions? options,
+    IChatClient innerChatClient,
+    CancellationToken ct)
+{
+    Console.WriteLine($"Request messages: {messages.Count()}");
+    var response = await innerChatClient.GetResponseAsync(messages, options, ct);
+    Console.WriteLine($"Response tokens: {response.Usage?.TotalTokenCount}");
+    return response;
+}
+
+// Apply to chat client before creating agent
+var chatClientWithMiddleware = chatClient
+    .AsBuilder()
+    .Use(getResponseFunc: TokenCountingMiddleware, getStreamingResponseFunc: null)
+    .Build();
+
+var agent = chatClientWithMiddleware.CreateAIAgent(
+    instructions: "You are a helpful assistant.");
+
+// Or via factory when creating agent
+var agent = new AzureOpenAIClient(endpoint, credential)
+    .GetChatClient(deployment)
+    .CreateAIAgent("You are a helpful assistant.",
+        clientFactory: client => client
+            .AsBuilder()
+            .Use(getResponseFunc: TokenCountingMiddleware, getStreamingResponseFunc: null)
+            .Build());
+```
+
+### Combining Middleware
+
+Stack multiple middleware in order:
+
+```csharp
+var agent = baseAgent
+    .AsBuilder()
+    .Use(LoggingMiddleware)
+    .Use(AuditFunctionMiddleware)
+    .UseOpenTelemetry(sourceName: "my-agent")
+    .Build();
+```
+
 ## Error Handling Strategies
 
 ### Differentiate Error Types

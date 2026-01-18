@@ -1,11 +1,11 @@
 ---
 name: working-with-ms-agent-framework
-description: Use when building AI agents with Microsoft Agent Framework (Semantic Kernel + AutoGen unified); when implementing memory or context providers; when threads won't deserialize; when workflow checkpointing fails; when migrating from Semantic Kernel or AutoGen; when seeing ChatAgent or AgentThread errors
+description: Use when building AI agents with Microsoft Agent Framework (Semantic Kernel + AutoGen unified); when implementing memory or context providers; when threads won't deserialize; when workflow checkpointing fails; when migrating from Semantic Kernel or AutoGen; when seeing ChatAgent or AgentThread errors; when exposing agents as MCP tools; when needing human-in-the-loop approvals; when hosting agents in Azure Functions
 ---
 
 # Working with Microsoft Agent Framework
 
-Microsoft Agent Framework (October 2025) unifies Semantic Kernel and AutoGen into one SDK. Both legacy frameworks are in maintenance mode.
+Microsoft Agent Framework unifies Semantic Kernel and AutoGen into one SDK. Both legacy frameworks are in maintenance mode. Currently in public preview.
 
 **Core principle:** Agents are stateless. All state lives in threads. Context providers enforce **policy** about what enters the prompt, how, and when it decays.
 
@@ -194,7 +194,7 @@ entities/
 
 ### C# Setup
 
-C# embeds DevUI as SDK component (docs in progress):
+C# embeds DevUI as SDK component:
 ```csharp
 var app = builder.Build();
 
@@ -257,6 +257,218 @@ devui [directory] [options]
   --reload        Auto-reload on file changes
   --headless      API only, no UI
   --mode          developer|user (default: developer)
+```
+
+## Structured Output
+
+Get typed responses using JSON schema:
+
+```csharp
+public class PersonInfo
+{
+    [JsonPropertyName("name")] public string? Name { get; set; }
+    [JsonPropertyName("age")] public int? Age { get; set; }
+    [JsonPropertyName("occupation")] public string? Occupation { get; set; }
+}
+
+// Create schema from type
+JsonElement schema = AIJsonUtilities.CreateJsonSchema(typeof(PersonInfo));
+
+// Configure response format
+ChatOptions chatOptions = new()
+{
+    ResponseFormat = ChatResponseFormatJson.ForJsonSchema(
+        schema: schema,
+        schemaName: "PersonInfo",
+        schemaDescription: "Information about a person")
+};
+
+AIAgent agent = chatClient.CreateAIAgent(new ChatClientAgentOptions()
+{
+    Name = "Assistant",
+    Instructions = "You extract person information.",
+    ChatOptions = chatOptions
+});
+
+var response = await agent.RunAsync("John Smith is a 35-year-old software engineer.");
+var personInfo = response.Deserialize<PersonInfo>(JsonSerializerOptions.Web);
+```
+
+## Agent as Function Tool
+
+Use `.AsAIFunction()` to compose agents:
+
+```csharp
+// Create a specialist agent
+AIAgent weatherAgent = chatClient.CreateAIAgent(
+    instructions: "You answer questions about the weather.",
+    name: "WeatherAgent",
+    description: "An agent that answers questions about the weather.",
+    tools: [AIFunctionFactory.Create(GetWeather)]);
+
+// Use it as a tool in a main agent
+AIAgent mainAgent = chatClient.CreateAIAgent(
+    instructions: "You are a helpful assistant who responds in French.",
+    tools: [weatherAgent.AsAIFunction()]);
+
+// Main agent can now delegate to weather agent
+Console.WriteLine(await mainAgent.RunAsync("What's the weather in Paris?"));
+```
+
+## MCP Integration
+
+Expose agents as Model Context Protocol (MCP) tools:
+
+```csharp
+// Install packages
+// dotnet add package ModelContextProtocol --prerelease
+
+using ModelContextProtocol.Server;
+using Microsoft.Extensions.Hosting;
+
+// Create agent
+AIAgent agent = chatClient.CreateAIAgent(
+    instructions: "You are good at telling jokes.",
+    name: "Joker");
+
+// Convert to MCP tool (name and description from agent)
+McpServerTool tool = McpServerTool.Create(agent.AsAIFunction());
+
+// Setup MCP server over stdio
+HostApplicationBuilder builder = Host.CreateEmptyApplicationBuilder(settings: null);
+builder.Services
+    .AddMcpServer()
+    .WithStdioServerTransport()
+    .WithTools([tool]);
+
+await builder.Build().RunAsync();
+```
+
+## Human-in-the-Loop Approvals
+
+Require user approval before executing sensitive functions:
+
+```csharp
+[Description("Process a refund for an order")]
+static string ProcessRefund(string orderId) => $"Refund processed for {orderId}";
+
+// Wrap function to require approval
+AIFunction refundFunction = AIFunctionFactory.Create(ProcessRefund);
+AIFunction approvalRequired = new ApprovalRequiredAIFunction(refundFunction);
+
+AIAgent agent = chatClient.CreateAIAgent(
+    instructions: "You help with customer orders.",
+    tools: [approvalRequired]);
+
+// Run agent
+AgentThread thread = agent.GetNewThread();
+AgentRunResponse response = await agent.RunAsync("Process refund for order #12345", thread);
+
+// Check for approval requests
+var approvalRequests = response.Messages
+    .SelectMany(m => m.Contents)
+    .OfType<FunctionApprovalRequestContent>()
+    .ToList();
+
+if (approvalRequests.Any())
+{
+    var request = approvalRequests.First();
+    Console.WriteLine($"Approval needed for: {request.FunctionCall.Name}");
+
+    // Create approval/rejection response
+    var approvalMessage = new ChatMessage(ChatRole.User,
+        [request.CreateResponse(approved: true)]); // or false to reject
+
+    // Continue with approval
+    Console.WriteLine(await agent.RunAsync(approvalMessage, thread));
+}
+```
+
+## Durable Agents (Azure Functions)
+
+Host agents in Azure Functions with automatic state management:
+
+```csharp
+// Program.cs
+using Microsoft.Agents.AI.Hosting.AzureFunctions;
+
+AIAgent agent = new AzureOpenAIClient(new Uri(endpoint), new DefaultAzureCredential())
+    .GetChatClient("gpt-4o-mini")
+    .CreateAIAgent(
+        instructions: "You are a helpful assistant.",
+        name: "MyDurableAgent");
+
+using IHost app = FunctionsApplication
+    .CreateBuilder(args)
+    .ConfigureFunctionsWebApplication()
+    .ConfigureDurableAgents(options => options.AddAIAgent(agent))
+    .Build();
+
+app.Run();
+```
+
+**Features:**
+- Automatic HTTP endpoints for agent interaction
+- Thread state persisted in Durable Task Scheduler
+- Survives process restarts
+- Scales to zero when idle
+
+**Endpoints created automatically:**
+```
+POST /api/agents/MyDurableAgent/run  # Start/continue conversation
+```
+
+**Continuing conversations:**
+```bash
+# First request - note x-ms-thread-id header in response
+curl -X POST http://localhost:7071/api/agents/MyDurableAgent/run \
+  -H "Content-Type: text/plain" \
+  -d "Hello!"
+
+# Continue same conversation using thread_id
+curl -X POST "http://localhost:7071/api/agents/MyDurableAgent/run?thread_id=<thread-id>" \
+  -H "Content-Type: text/plain" \
+  -d "What did I just say?"
+```
+
+**Multi-Agent Orchestration with Durable Functions:**
+
+```csharp
+// Register multiple agents
+builder.ConfigureDurableAgents(options =>
+{
+    options.AddAIAgent(mainAgent);
+    options.AddAIAgent(frenchTranslator);
+    options.AddAIAgent(spanishTranslator);
+});
+
+// Orchestration function
+[Function("translate_workflow")]
+public static async Task<Dictionary<string, string>> TranslateWorkflow(
+    [OrchestrationTrigger] TaskOrchestrationContext context)
+{
+    var input = context.GetInput<string>();
+
+    // Get main response
+    DurableAIAgent mainAgent = context.GetAgent("MainAgent");
+    var mainResponse = await mainAgent.RunAsync<TextResponse>(input);
+
+    // Fan out to translators concurrently
+    DurableAIAgent french = context.GetAgent("FrenchTranslator");
+    DurableAIAgent spanish = context.GetAgent("SpanishTranslator");
+
+    var frenchTask = french.RunAsync<TextResponse>(mainResponse.Result.Text);
+    var spanishTask = spanish.RunAsync<TextResponse>(mainResponse.Result.Text);
+
+    await Task.WhenAll(frenchTask, spanishTask);
+
+    return new Dictionary<string, string>
+    {
+        ["original"] = mainResponse.Result.Text,
+        ["french"] = (await frenchTask).Result.Text,
+        ["spanish"] = (await spanishTask).Result.Text
+    };
+}
 ```
 
 ## Thread Serialization (Critical Pattern)
@@ -456,6 +668,9 @@ await workflow.InvokeStreamingAsync(input, runtime);
 | Use Magentic when Sequential suffices | Use simplest pattern that works |
 | Skip `UseImmutableKernel` with `ContextualFunctionProvider` | Always set `UseImmutableKernel = true` |
 | Start with Semantic Kernel for new projects | Start with ME AI, escalate to Agent Framework |
+| Skip approval for sensitive operations | Use `ApprovalRequiredAIFunction` |
+| Build custom HTTP handlers for agents | Use Durable Agents with auto-generated endpoints |
+| Parse unstructured LLM output | Use structured output with JSON schema |
 
 ## Red Flags - STOP
 
@@ -467,12 +682,11 @@ await workflow.InvokeStreamingAsync(input, runtime);
 
 ## Known Limitations
 
-- **Distributed runtime**: In-process only; distributed execution planned
-- **C# Magentic**: Most examples are Python
-- **C# message stores**: Redis/database need custom implementation
+- **Distributed runtime**: In-process only; distributed execution via Durable Functions
+- **C# Magentic**: Most examples are Python; use GroupChat or Handoff patterns in C#
+- **C# message stores**: Redis/database need custom `ChatMessageStore` implementation
 - **Token counting**: Budget calculation in providers undocumented
-- **DevUI C# docs**: Python has full docs; C# DevUI docs "coming soon" (embedded SDK approach differs)
-- **GA timeline**: Agent Framework stable release "coming soon" (as of Jan 2025)
+- **Preview status**: Agent Framework is in public preview (as of Jan 2026)
 
 ## Resources
 
